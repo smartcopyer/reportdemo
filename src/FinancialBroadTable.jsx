@@ -1,7 +1,26 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { Table, Card, Tag, Select, DatePicker, Space, Button, message } from 'antd';
+import React, { useMemo, useState, useCallback } from 'react';
+import {
+    Table,
+    Card,
+    Tag,
+    Select,
+    DatePicker,
+    Space,
+    Button,
+    message,
+    Segmented,
+    TreeSelect,
+} from 'antd';
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
+import {
+    GROUP_ID,
+    GROUP_DISPLAY_NAME,
+    buildTreeSelectData,
+    getChildren,
+    getNode,
+    listAllCompanies,
+} from './companyHierarchy';
 import './FinancialReport.css';
 
 const { RangePicker } = DatePicker;
@@ -22,9 +41,8 @@ function parseNumericDisplay(s) {
     return parseFloat(t);
 }
 
-/** 同一指标在同一时间列、不同「粒度」下返回不同数值，切换 日/月/年 时表格会明显变化 */
-function unitNoise(metricKey, colKey, periodType) {
-    const u = hash32(`${metricKey}|${colKey}|${periodType}`) / 4294967296;
+function unitNoise(metricKey, colKey, periodType, companyId = GROUP_ID) {
+    const u = hash32(`${metricKey}|${colKey}|${periodType}|${companyId}`) / 4294967296;
     return u;
 }
 
@@ -54,7 +72,7 @@ function formatRatio(u) {
 
 function formatDeviation(u) {
     const n = -4 + u * 8;
-    return `${n >= 0 ? '' : ''}${n.toFixed(1)}%`;
+    return `${n.toFixed(1)}%`;
 }
 
 /** 指标行定义：分组 + 更多明细行 */
@@ -93,30 +111,76 @@ const COL_CAPS = { day: 45, month: 36, year: 15 };
 
 const PERIOD_LABELS = { day: '按日', month: '按月', year: '按年' };
 
-/** 导出与当前表格一致的数据（含表头说明行） */
-function exportFinancialTableXlsx({ periodType, range, timeMeta, dataSource }) {
+function exportFinancialTableXlsx({
+    periodType,
+    range,
+    timeMeta,
+    dataSource,
+    extraMetaLines = [],
+    sheetName = '资金监控',
+    filePrefix = '资金监控宽表',
+}) {
     const label = PERIOD_LABELS[periodType] ?? periodType;
-    const metaRows = [
-        ['资金监控宽表'],
-        [`统计粒度：${label}`],
-        [`区间：${range[0].format('YYYY-MM-DD')} ~ ${range[1].format('YYYY-MM-DD')}`],
-        [],
-    ];
-    const header = ['指标 / 截止日期', ...timeMeta.map((m) => m.title)];
+    const metaRows = [['资金监控宽表'], ...extraMetaLines, [`统计粒度：${label}`], [`区间：${range[0].format('YYYY-MM-DD')} ~ ${range[1].format('YYYY-MM-DD')}`], []];
+    const header = ['名称', '指标', ...timeMeta.map((m) => m.title)];
     const body = dataSource.map((row) => {
-        const name = row.metric ?? '';
+        const metric = row.metric ?? '';
         if (row.isGroup) {
-            return [name, ...timeMeta.map(() => '')];
+            return ['', metric, ...timeMeta.map(() => '')];
         }
-        return [name, ...timeMeta.map((m) => (row[m.key] != null ? String(row[m.key]) : ''))];
+        const entity = row.entityName != null ? String(row.entityName) : '';
+        return [entity, metric, ...timeMeta.map((m) => (row[m.key] != null ? String(row[m.key]) : ''))];
     });
     const aoa = [...metaRows, header, ...body];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '资金监控');
+    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
     const stamp = `${range[0].format('YYYYMMDD')}_${range[1].format('YYYYMMDD')}`;
     const safeLabel = label.replace(/\s/g, '');
-    XLSX.writeFile(wb, `资金监控宽表_${safeLabel}_${stamp}.xlsx`);
+    XLSX.writeFile(wb, `${filePrefix}_${safeLabel}_${stamp}.xlsx`);
+}
+
+/** 导出用：树形行深度优先拍平（支持集团→公司→企业 三层） */
+function flattenMergeRowsForExport(rows) {
+    const out = [];
+    function walk(r) {
+        const { children, ...rest } = r;
+        out.push(rest);
+        if (children?.length) {
+            for (const ch of children) {
+                walk(ch);
+            }
+        }
+    }
+    for (const row of rows) {
+        walk(row);
+    }
+    return out;
+}
+
+function exportCompareTableXlsx({ compareMonth, compareIds, dataSource, extraMetaLines = [] }) {
+    const monthLabel = compareMonth.format('YYYY年MM月');
+    const names = compareIds.map((id) => getNode(id)?.name ?? id).join('、');
+    const metaRows = [
+        ['多公司并排对比'],
+        ...extraMetaLines,
+        [`对比月份：${monthLabel}`],
+        [`对比主体：${names}`],
+        [],
+    ];
+    const header = ['指标', ...compareIds.map((id) => getNode(id)?.name ?? id)];
+    const body = dataSource.map((row) => {
+        if (row.isGroup) {
+            return [row.metric ?? '', ...compareIds.map(() => '')];
+        }
+        return [row.metric ?? '', ...compareIds.map((id) => (row[`co_${id}`] != null ? String(row[`co_${id}`]) : ''))];
+    });
+    const aoa = [...metaRows, header, ...body];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '并排对比');
+    const stamp = compareMonth.format('YYYYMM');
+    XLSX.writeFile(wb, `资金监控_多公司对比_${stamp}.xlsx`);
 }
 
 function buildTimeColumns(periodType, start, end) {
@@ -173,9 +237,9 @@ function buildTimeColumns(periodType, start, end) {
     return keys;
 }
 
-function cellValue(metricKey, fmt, colKey, periodType) {
-    const u = unitNoise(metricKey, colKey, periodType);
-    const u2 = unitNoise(metricKey + '2', colKey, periodType);
+function cellValue(metricKey, fmt, colKey, periodType, companyId = GROUP_ID) {
+    const u = unitNoise(metricKey, colKey, periodType, companyId);
+    const u2 = unitNoise(`${metricKey}2`, colKey, periodType, companyId);
 
     switch (fmt) {
         case 'amount':
@@ -200,27 +264,36 @@ function cellValue(metricKey, fmt, colKey, periodType) {
 }
 
 const FinancialBroadTable = () => {
+    const [analysisMode, setAnalysisMode] = useState('merge');
+    const [selectedCompanyId, setSelectedCompanyId] = useState(GROUP_ID);
+    const mergeTableKey = `merge-${selectedCompanyId}-${analysisMode}`;
+    const [compareIds, setCompareIds] = useState(['c-east', 'c-north', 'e-sh']);
+    const [compareMonth, setCompareMonth] = useState(() => dayjs().subtract(1, 'month').startOf('month'));
+
     const [periodType, setPeriodType] = useState('month');
     const [range, setRange] = useState(() => [
         dayjs().subtract(11, 'month').startOf('month'),
         dayjs().endOf('month'),
     ]);
 
-    useEffect(() => {
+    const handlePeriodTypeChange = useCallback((v) => {
+        setPeriodType(v);
         const end = dayjs();
-        if (periodType === 'day') {
+        if (v === 'day') {
             setRange([end.subtract(29, 'day').startOf('day'), end.endOf('day')]);
-        } else if (periodType === 'month') {
+        } else if (v === 'month') {
             setRange([end.subtract(11, 'month').startOf('month'), end.endOf('month')]);
         } else {
             setRange([end.subtract(4, 'year').startOf('year'), end.endOf('year')]);
         }
-    }, [periodType]);
+    }, []);
 
     const timeMeta = useMemo(
         () => buildTimeColumns(periodType, range[0], range[1]),
         [periodType, range],
     );
+
+    const treeData = useMemo(() => buildTreeSelectData(), []);
 
     const renderValue = useCallback(
         (value, record) => {
@@ -234,9 +307,24 @@ const FinancialBroadTable = () => {
         [],
     );
 
-    const columns = useMemo(() => {
-        const first = {
-            title: '指标 / 截止日期',
+    const mergeColumns = useMemo(() => {
+        const nameCol = {
+            title: '名称',
+            dataIndex: 'entityName',
+            key: 'entityName',
+            fixed: 'left',
+            width: 130,
+            render: (text, record) => {
+                if (record.isGroup) return '';
+                const lv = record.drillLevel ?? 0;
+                if (lv === 0) return <span className="entity-name-level-0">{text}</span>;
+                if (lv === 1) return <span className="entity-name-level-1">{text}</span>;
+                return <span className="entity-name-level-2">{text}</span>;
+            },
+        };
+
+        const metricCol = {
+            title: '指标',
             dataIndex: 'metric',
             key: 'metric',
             fixed: 'left',
@@ -246,9 +334,11 @@ const FinancialBroadTable = () => {
                     return <span style={{ fontWeight: 'bold', color: '#333' }}>{text}</span>;
                 }
                 return (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                         <span>{text}</span>
-                        <span style={{ color: '#999', fontSize: '10px' }}>📊</span>
+                        {(record.drillLevel ?? 0) === 0 ? (
+                            <span style={{ color: '#999', fontSize: '10px' }}>📊</span>
+                        ) : null}
                     </div>
                 );
             },
@@ -264,25 +354,148 @@ const FinancialBroadTable = () => {
             render: renderValue,
         }));
 
-        return [first, ...rest];
+        return [nameCol, metricCol, ...rest];
     }, [timeMeta, periodType, renderValue]);
 
-    const dataSource = useMemo(() => {
+    const mergeDataSource = useMemo(() => {
+        const cellsFor = (tpl, entityId) => {
+            const cells = {};
+            for (const meta of timeMeta) {
+                cells[meta.key] = cellValue(tpl.key, tpl.fmt, meta.key, periodType, entityId);
+            }
+            return cells;
+        };
+
+        /**
+         * 集团合并口径：一层=集团数据 → 展开二层=各公司 → 再展开三层=各企业
+         * 选二级公司口径：一层=该公司 → 展开二层=旗下企业
+         * 选三级叶子：仅一层，无展开
+         */
+        return METRIC_TEMPLATE.map((row) => {
+            if (row.isGroup) {
+                return { key: row.key, entityName: '', metric: row.metric, isGroup: true };
+            }
+
+            if (selectedCompanyId === GROUP_ID) {
+                const companies = getChildren(GROUP_ID);
+                const base = {
+                    key: row.key,
+                    entityName: GROUP_DISPLAY_NAME,
+                    metric: row.metric,
+                    fmt: row.fmt,
+                    isGroup: false,
+                    drillLevel: 0,
+                    ...cellsFor(row, GROUP_ID),
+                };
+                if (!companies.length) return base;
+
+                base.children = companies.map((co) => {
+                    const enterprises = getChildren(co.id);
+                    const coRow = {
+                        key: `${row.key}__${co.id}`,
+                        entityName: co.name,
+                        metric: row.metric,
+                        drillLevel: 1,
+                        ...cellsFor(row, co.id),
+                    };
+                    if (!enterprises.length) return coRow;
+                    coRow.children = enterprises.map((en) => ({
+                        key: `${row.key}__${co.id}__${en.id}`,
+                        entityName: en.name,
+                        metric: row.metric,
+                        drillLevel: 2,
+                        ...cellsFor(row, en.id),
+                    }));
+                    return coRow;
+                });
+                return base;
+            }
+
+            const next = getChildren(selectedCompanyId);
+            if (next.length > 0) {
+                return {
+                    key: row.key,
+                    entityName: getNode(selectedCompanyId)?.name ?? '',
+                    metric: row.metric,
+                    fmt: row.fmt,
+                    isGroup: false,
+                    drillLevel: 0,
+                    ...cellsFor(row, selectedCompanyId),
+                    children: next.map((en) => ({
+                        key: `${row.key}__${en.id}`,
+                        entityName: en.name,
+                        metric: row.metric,
+                        drillLevel: 1,
+                        ...cellsFor(row, en.id),
+                    })),
+                };
+            }
+
+            return {
+                key: row.key,
+                entityName: getNode(selectedCompanyId)?.name ?? '',
+                metric: row.metric,
+                fmt: row.fmt,
+                isGroup: false,
+                drillLevel: 0,
+                ...cellsFor(row, selectedCompanyId),
+            };
+        });
+    }, [timeMeta, periodType, selectedCompanyId]);
+
+    const mergeExportFlat = useMemo(
+        () => flattenMergeRowsForExport(mergeDataSource),
+        [mergeDataSource],
+    );
+
+    const compareColumns = useMemo(() => {
+        const first = {
+            title: '指标',
+            dataIndex: 'metric',
+            key: 'metric',
+            fixed: 'left',
+            width: 260,
+            render: (text, record) =>
+                record.isGroup ? (
+                    <span style={{ fontWeight: 'bold', color: '#333' }}>{text}</span>
+                ) : (
+                    <span>{text}</span>
+                ),
+        };
+        const rest = compareIds.map((cid) => ({
+            title: (
+                <span title={getNode(cid)?.name}>
+                    {getNode(cid)?.short ?? cid}
+                </span>
+            ),
+            dataIndex: `co_${cid}`,
+            key: `co_${cid}`,
+            width: 118,
+            align: 'right',
+            render: renderValue,
+        }));
+        return [first, ...rest];
+    }, [compareIds, renderValue]);
+
+    const compareDataSource = useMemo(() => {
+        const mk = compareMonth.format('YYYY-MM');
         return METRIC_TEMPLATE.map((row) => {
             if (row.isGroup) {
                 return { key: row.key, metric: row.metric, isGroup: true };
             }
             const cells = {};
-            for (const meta of timeMeta) {
-                cells[meta.key] = cellValue(row.key, row.fmt, meta.key, periodType);
+            for (const cid of compareIds) {
+                cells[`co_${cid}`] = cellValue(row.key, row.fmt, mk, 'month', cid);
             }
             return {
                 key: row.key,
                 metric: row.metric,
+                fmt: row.fmt,
+                isGroup: false,
                 ...cells,
             };
         });
-    }, [timeMeta, periodType]);
+    }, [compareIds, compareMonth]);
 
     const picker = periodType === 'day' ? 'date' : periodType === 'month' ? 'month' : 'year';
 
@@ -294,60 +507,176 @@ const FinancialBroadTable = () => {
               : ['开始年份', '结束年份'];
 
     const handleExportExcel = useCallback(() => {
-        if (!range[0] || !range[1] || !range[0].isValid() || !range[1].isValid()) {
-            message.warning('请先选择有效日期区间');
-            return;
-        }
         try {
-            exportFinancialTableXlsx({ periodType, range, timeMeta, dataSource });
+            if (analysisMode === 'compare') {
+                if (!compareIds.length) {
+                    message.warning('请至少选择一家公司进行对比');
+                    return;
+                }
+                exportCompareTableXlsx({
+                    compareMonth,
+                    compareIds,
+                    dataSource: compareDataSource,
+                });
+            } else {
+                if (!range[0] || !range[1] || !range[0].isValid() || !range[1].isValid()) {
+                    message.warning('请先选择有效日期区间');
+                    return;
+                }
+                const entity = getNode(selectedCompanyId);
+                exportFinancialTableXlsx({
+                    periodType,
+                    range,
+                    timeMeta,
+                    dataSource: mergeExportFlat,
+                    extraMetaLines: [[`统计口径：${entity?.name ?? '—'}（${entity?.id === GROUP_ID ? '集团合并' : '单体/合并下级视图'}）`], ['分析模式：默认视图 + 指标下钻（子行已展开导出）']],
+                });
+            }
             message.success('已开始下载 Excel');
         } catch (e) {
             console.error(e);
             message.error('导出失败，请重试');
         }
-    }, [periodType, range, timeMeta, dataSource]);
+    }, [
+        analysisMode,
+        range,
+        periodType,
+        timeMeta,
+        mergeExportFlat,
+        compareDataSource,
+        compareMonth,
+        compareIds,
+        selectedCompanyId,
+    ]);
 
     return (
         <Card
             className="financial-card report-fullscreen"
-            title="资金监控宽表 (多月度对比分析)"
-            extra={<Tag color="blue">模拟数据 · 随粒度变化</Tag>}
+            title={
+                <Space wrap size="small">
+                    <span>资金监控宽表</span>
+                    <Tag color={analysisMode === 'merge' ? 'blue' : 'geekblue'}>
+                        {analysisMode === 'merge' ? '默认视图' : '多公司并排对比'}
+                    </Tag>
+                </Space>
+            }
         >
-            <div style={{ marginBottom: 16 }}>
-                <Space wrap>
-                    <Select
-                        value={periodType}
-                        style={{ width: 100 }}
-                        onChange={setPeriodType}
+            <div className="report-toolbar">
+                <Space wrap size={[12, 8]} align="center">
+                    <Segmented
+                        value={analysisMode}
+                        onChange={setAnalysisMode}
                         options={[
-                            { value: 'day', label: '按日' },
-                            { value: 'month', label: '按月' },
-                            { value: 'year', label: '按年' },
+                            { label: '默认视图', value: 'merge' },
+                            { label: '多公司并排对比', value: 'compare' },
                         ]}
                     />
-                    <RangePicker
-                        picker={picker}
-                        value={range}
-                        onChange={(vals) => vals && vals[0] && vals[1] && setRange(vals)}
-                        placeholder={rangePlaceholder}
-                        allowClear={false}
-                    />
-                    <Button type="primary" onClick={() => message.success('已按当前区间展示（模拟数据）')}>
+
+                    {analysisMode === 'merge' ? (
+                        <>
+                            <span className="report-toolbar-label">统计口径</span>
+                            <TreeSelect
+                                className="company-tree-select"
+                                value={selectedCompanyId}
+                                treeData={treeData}
+                                onChange={(v) => setSelectedCompanyId(v)}
+                                treeDefaultExpandAll
+                                showSearch
+                                treeNodeFilterProp="title"
+                                placeholder="选择公司主体"
+                                style={{ minWidth: 220 }}
+                            />
+                        </>
+                    ) : (
+                        <>
+                            <span className="report-toolbar-label">对比月份</span>
+                            <DatePicker
+                                picker="month"
+                                value={compareMonth}
+                                onChange={(d) => d && setCompareMonth(d.startOf('month'))}
+                                allowClear={false}
+                            />
+                            <span className="report-toolbar-label">选择公司</span>
+                            <Select
+                                mode="multiple"
+                                className="compare-company-select"
+                                value={compareIds}
+                                onChange={(ids) => setCompareIds(ids.slice(0, 8))}
+                                options={listAllCompanies().map((c) => ({
+                                    label: c.name,
+                                    value: c.id,
+                                }))}
+                                placeholder="选择 2～8 家公司"
+                                maxTagCount="responsive"
+                                style={{ minWidth: 320 }}
+                            />
+                        </>
+                    )}
+                </Space>
+
+                <Space wrap className="report-toolbar-row2">
+                    {analysisMode === 'merge' && (
+                        <>
+                            <Select
+                                value={periodType}
+                                style={{ width: 100 }}
+                                onChange={handlePeriodTypeChange}
+                                options={[
+                                    { value: 'day', label: '按日' },
+                                    { value: 'month', label: '按月' },
+                                    { value: 'year', label: '按年' },
+                                ]}
+                            />
+                            <RangePicker
+                                picker={picker}
+                                value={range}
+                                onChange={(vals) => vals && vals[0] && vals[1] && setRange(vals)}
+                                placeholder={rangePlaceholder}
+                                allowClear={false}
+                            />
+                        </>
+                    )}
+                    <Button type="primary" onClick={() => message.success('已按当前条件展示（模拟数据）')}>
                         查询
                     </Button>
                     <Button onClick={handleExportExcel}>导出Excel</Button>
                 </Space>
             </div>
 
-            <Table
-                columns={columns}
-                dataSource={dataSource}
-                pagination={false}
-                bordered
-                size="small"
-                scroll={{ x: 'max-content', y: 'calc(100vh - 220px)' }}
-                rowClassName={(record) => (record.isGroup ? 'group-row' : 'data-row')}
-            />
+            {analysisMode === 'merge' ? (
+                <Table
+                    key={mergeTableKey}
+                    className="report-main-table report-tree-table"
+                    columns={mergeColumns}
+                    dataSource={mergeDataSource}
+                    pagination={false}
+                    bordered
+                    size="small"
+                    scroll={{ x: 'max-content', y: 'calc(100vh - 280px)' }}
+                    rowClassName={(record) => {
+                        if (record.isGroup) return 'group-row';
+                        const lv = record.drillLevel ?? 0;
+                        if (lv === 2) return 'data-row drill-row-l2';
+                        if (lv === 1) return 'data-row drill-row-l1';
+                        return 'data-row';
+                    }}
+                    expandable={{
+                        indentSize: 12,
+                        expandIconColumnIndex: 1,
+                    }}
+                />
+            ) : (
+                <Table
+                    className="report-main-table"
+                    columns={compareColumns}
+                    dataSource={compareDataSource}
+                    pagination={false}
+                    bordered
+                    size="small"
+                    scroll={{ x: 'max-content', y: 'calc(100vh - 280px)' }}
+                    rowClassName={(record) => (record.isGroup ? 'group-row' : 'data-row')}
+                />
+            )}
         </Card>
     );
 };

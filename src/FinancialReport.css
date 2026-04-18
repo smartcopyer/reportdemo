@@ -26,6 +26,50 @@
     min-height: 0;
 }
 
+.report-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.report-toolbar-label {
+    color: #666;
+    font-size: 13px;
+}
+
+.report-toolbar-row2 {
+    padding-left: 0;
+}
+
+/* 三层下钻：集团(L0) → 公司(L1) → 企业(L2) */
+.entity-name-level-0 {
+    font-weight: 600;
+    color: #262626;
+}
+
+.entity-name-level-1 {
+    font-weight: 500;
+    color: #434343;
+}
+
+.entity-name-level-2 {
+    color: #595959;
+    font-weight: normal;
+}
+
+.report-tree-table .drill-row-l1 td {
+    background-color: #fafcff !important;
+}
+
+.report-tree-table .drill-row-l2 td {
+    background-color: #f6ffed !important;
+}
+
+.report-tree-table .ant-table-row-expand-icon {
+    margin-inline-end: 6px;
+}
+
 /* 1. 整体字体和紧凑度 */
 .financial-card .ant-table {
     font-size: 12px !important;

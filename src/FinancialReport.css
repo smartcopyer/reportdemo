@@ -1,0 +1,50 @@
+/* 仿Wind报表风格 */
+
+/* 1. 整体字体和紧凑度 */
+.financial-card .ant-table {
+    font-size: 12px !important;
+    line-height: 1.2;
+}
+
+.financial-card .ant-table-thead > tr > th {
+    background-color: #f0f0f0 !important; /* 表头淡灰色 */
+    color: #555 !important;
+    font-weight: bold;
+    padding: 8px 4px !important;
+    border-bottom: 2px solid #d9d9d9 !important;
+}
+
+/* 2. 指标列（左侧固定列）背景 */
+.financial-card .ant-table-cell-fix-left {
+    background-color: #fafafa !important;
+    border-right: 1px solid #e8e8e8 !important;
+}
+
+/* 3. 分组行样式 */
+.group-row {
+    background-color: #f5f5f5 !important; /* 指标分组的浅灰底色 */
+}
+.group-row td {
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+}
+
+/* 4. 数据行悬停变色 */
+.data-row:hover td {
+    background-color: #e6f7ff !important;
+}
+
+/* 5. 单元格边距微调 */
+.ant-table-cell {
+    padding: 6px 8px !important;
+}
+
+/* 6. 年末数据突出显示（可选） */
+.year-end {
+    background-color: #fffbe6 !important; /* 淡黄色突出年报数据 */
+}
+
+/* 7. 斑马纹效果 */
+.ant-table-tbody > tr:nth-child(even):not(.group-row) {
+    background-color: #fafafa;
+}

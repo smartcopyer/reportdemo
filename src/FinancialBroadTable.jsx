@@ -308,7 +308,11 @@ const FinancialBroadTable = () => {
     }, [periodType, range, timeMeta, dataSource]);
 
     return (
-        <Card className="financial-card" title="资金监控宽表 (多月度对比分析)" extra={<Tag color="blue">模拟数据 · 随粒度变化</Tag>}>
+        <Card
+            className="financial-card report-fullscreen"
+            title="资金监控宽表 (多月度对比分析)"
+            extra={<Tag color="blue">模拟数据 · 随粒度变化</Tag>}
+        >
             <div style={{ marginBottom: 16 }}>
                 <Space wrap>
                     <Select
@@ -341,7 +345,7 @@ const FinancialBroadTable = () => {
                 pagination={false}
                 bordered
                 size="small"
-                scroll={{ x: 'max-content', y: 600 }}
+                scroll={{ x: 'max-content', y: 'calc(100vh - 220px)' }}
                 rowClassName={(record) => (record.isGroup ? 'group-row' : 'data-row')}
             />
         </Card>

@@ -2,7 +2,7 @@ import FinancialBroadTable from './FinancialBroadTable';
 
 function App() {
   return (
-      <div className="App">
+      <div className="app-layout">
         <FinancialBroadTable />
       </div>
   );

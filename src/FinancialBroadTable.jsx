@@ -107,6 +107,9 @@ const METRIC_TEMPLATE = [
     { key: 'm21', metric: '利息保障倍数', fmt: 'ratio' },
 ];
 
+/** 多公司并排对比：行=公司，列=指标（不含分组行） */
+const COMPARE_METRICS = METRIC_TEMPLATE.filter((r) => !r.isGroup);
+
 const COL_CAPS = { day: 45, month: 36, year: 15 };
 
 const PERIOD_LABELS = { day: '按日', month: '按月', year: '按年' };
@@ -158,7 +161,7 @@ function flattenMergeRowsForExport(rows) {
     return out;
 }
 
-function exportCompareTableXlsx({ compareMonth, compareIds, dataSource, extraMetaLines = [] }) {
+function exportCompareTableXlsx({ compareMonth, compareIds, rows, extraMetaLines = [] }) {
     const monthLabel = compareMonth.format('YYYY年MM月');
     const names = compareIds.map((id) => getNode(id)?.name ?? id).join('、');
     const metaRows = [
@@ -168,13 +171,11 @@ function exportCompareTableXlsx({ compareMonth, compareIds, dataSource, extraMet
         [`对比主体：${names}`],
         [],
     ];
-    const header = ['指标', ...compareIds.map((id) => getNode(id)?.name ?? id)];
-    const body = dataSource.map((row) => {
-        if (row.isGroup) {
-            return [row.metric ?? '', ...compareIds.map(() => '')];
-        }
-        return [row.metric ?? '', ...compareIds.map((id) => (row[`co_${id}`] != null ? String(row[`co_${id}`]) : ''))];
-    });
+    const header = ['公司名称', ...COMPARE_METRICS.map((m) => m.metric)];
+    const body = rows.map((row) => [
+        row.companyName ?? '',
+        ...COMPARE_METRICS.map((m) => (row[m.key] != null ? String(row[m.key]) : '')),
+    ]);
     const aoa = [...metaRows, header, ...body];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
@@ -450,50 +451,37 @@ const FinancialBroadTable = () => {
 
     const compareColumns = useMemo(() => {
         const first = {
-            title: '指标',
-            dataIndex: 'metric',
-            key: 'metric',
+            title: '公司名称',
+            dataIndex: 'companyName',
+            key: 'companyName',
             fixed: 'left',
-            width: 260,
-            render: (text, record) =>
-                record.isGroup ? (
-                    <span style={{ fontWeight: 'bold', color: '#333' }}>{text}</span>
-                ) : (
-                    <span>{text}</span>
-                ),
+            width: 168,
+            ellipsis: true,
         };
-        const rest = compareIds.map((cid) => ({
-            title: (
-                <span title={getNode(cid)?.name}>
-                    {getNode(cid)?.short ?? cid}
-                </span>
-            ),
-            dataIndex: `co_${cid}`,
-            key: `co_${cid}`,
-            width: 118,
+        const rest = COMPARE_METRICS.map((m) => ({
+            title: m.metric,
+            dataIndex: m.key,
+            key: m.key,
+            width: 128,
             align: 'right',
+            ellipsis: true,
             render: renderValue,
         }));
         return [first, ...rest];
-    }, [compareIds, renderValue]);
+    }, [renderValue]);
 
     const compareDataSource = useMemo(() => {
         const mk = compareMonth.format('YYYY-MM');
-        return METRIC_TEMPLATE.map((row) => {
-            if (row.isGroup) {
-                return { key: row.key, metric: row.metric, isGroup: true };
-            }
-            const cells = {};
-            for (const cid of compareIds) {
-                cells[`co_${cid}`] = cellValue(row.key, row.fmt, mk, 'month', cid);
-            }
-            return {
-                key: row.key,
-                metric: row.metric,
-                fmt: row.fmt,
-                isGroup: false,
-                ...cells,
+        return compareIds.map((cid) => {
+            const node = getNode(cid);
+            const row = {
+                key: `compare_row_${cid}`,
+                companyName: node?.name ?? cid,
             };
+            for (const m of COMPARE_METRICS) {
+                row[m.key] = cellValue(m.key, m.fmt, mk, 'month', cid);
+            }
+            return row;
         });
     }, [compareIds, compareMonth]);
 
@@ -516,7 +504,7 @@ const FinancialBroadTable = () => {
                 exportCompareTableXlsx({
                     compareMonth,
                     compareIds,
-                    dataSource: compareDataSource,
+                    rows: compareDataSource,
                 });
             } else {
                 if (!range[0] || !range[1] || !range[0].isValid() || !range[1].isValid()) {
@@ -674,7 +662,7 @@ const FinancialBroadTable = () => {
                     bordered
                     size="small"
                     scroll={{ x: 'max-content', y: 'calc(100vh - 280px)' }}
-                    rowClassName={(record) => (record.isGroup ? 'group-row' : 'data-row')}
+                    rowClassName={() => 'data-row'}
                 />
             )}
         </Card>
